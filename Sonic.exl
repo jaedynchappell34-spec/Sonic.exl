@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Horror Sonic 1 – Full Browser</title>
+<style>
+body{margin:0;background:black;overflow:hidden;}
+canvas{display:block;margin:0 auto;background:black;}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="640" height="360"></canvas>
+<script>
+// Canvas
+const canvas=document.getElementById("gameCanvas");
+const ctx=canvas.getContext("2d");
+
+// Assets
+const assets={};
+function loadImage(name,src){assets[name]=new Image();assets[name].src=src;}
+function loadAudio(name,src){assets[name]=new Audio(src);}
+
+// Assets placeholders
+loadImage("knucklesRun","assets/knuckles_run.png");
+loadImage("knucklesJump","assets/knuckles_jump.png");
+loadImage("tailsCorpse","assets/tails_dead.png");
+loadImage("evilSonic","assets/evil_sonic.png");
+loadImage("ring","assets/ring.png");
+loadImage("motobug","assets/motobug.png");
+loadAudio("titleMusic","assets/title_music.mp3");
+loadAudio("eerieSFX","assets/creepy_sfx.wav");
+loadAudio("jumpScareAudio","assets/jumpscare.wav");
+
+// Game state
+let gamePhase="title", timer=0, cameraX=0, zone=1;
+let teleportCount=0, maxTeleports=8, teleportCooldown=30, teleporting=false, teleportTimer=0;
+let cutsceneTimer=0, finalJumpScareTimer=0, jumpScareParticles=[];
+let keys={}, rings=[], enemies=[];
+
+// Player
+let player={x:100,y:280,vx:0,vy:0,width:32,height:32,onGround:true,speed:0,maxSpeed:6,rings:0,alive:true};
+
+// Tilemaps GHZ & Marble simplified
+const tileMapGHZ=[
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[1,1,1,0,0,0,0,1,1,0,0,0,0,1,1,1,0,0,1,1],
+[1,1,1,1,0,0,1,1,1,0,0,1,1,1,1,1,0,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+const tileMapMarble=[
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[1,1,1,0,0,0,0,1,1,0,0,0,0,1,1,1,0,0,1,1],
+[1,1,1,1,0,0,1,1,1,0,0,1,1,1,1,1,0,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+let currentMap=tileMapGHZ;
+
+// Input
+document.addEventListener("keydown",e=>keys[e.code]=true);
+document.addEventListener("keyup",e=>keys[e.code]=false);
+
+// Enemy class
+class Enemy{
+constructor(x,y){this.x=x;this.y=y;this.vx=1.5;this.width=32;this.height=32;this.alive=true;}
+update(){this.x+=this.vx;if(this.x<0||this.x>640)this.vx*=-1;if(player.alive && Math.abs(player.x-this.x)<32 && Math.abs(player.y-this.y)<32)hitPlayer();}
+draw(){if(this.alive)ctx.drawImage(assets.motobug,this.x-cameraX,this.y,this.width,this.height);}
+}
+
+// Hit player
+function hitPlayer(){if(player.rings>0){for(let i=0;i<player.rings;i++){rings.push({x:player.x,y:player.y,vx:(Math.random()-0.5)*6,vy:-Math.random()*4});}player.rings=0;}}
+
+// Player update
+function updatePlayer(){
+if(!player.alive)return;
+if(keys["KeyD"]){player.speed+=0.2;if(player.speed>player.maxSpeed)player.speed=player.maxSpeed;}
+else if(keys["KeyA"]){player.speed-=0.2;if(player.speed<-player.maxSpeed)player.speed=-player.maxSpeed;}
+else player.speed*=0.8;
+player.vx=player.speed;player.vy+=0.4;
+let groundLevel=288;
+if(player.y+player.height>=groundLevel){player.y=groundLevel-32;player.vy=0;player.onGround=true;}else player.onGround=false;
+if(keys["Space"]&&player.onGround){player.vy=-8;player.onGround=false;}
+player.x+=player.vx;player.y+=player.vy;
+const deadZone=200;if(player.x-cameraX>deadZone)cameraX=player.x-deadZone;if(player.x-cameraX<100)cameraX=player.x-100;
+for(let i=rings.length-1;i>=0;i--){let r=rings[i];if(Math.abs(player.x-r.x)<16 && Math.abs(player.y-r.y)<16){rings.splice(i,1);player.rings++;}else{r.vy+=0.2;r.x+=r.vx;r.y+=r.vy;if(r.y>groundLevel)rings.splice(i,1);}}
+}
+
+// Draw map
+function drawMap(){for(let row=0;row<currentMap.length;row++){for(let col=0;col<currentMap[row].length;col++){if(currentMap[row][col]==1){ctx.fillStyle=(zone==1)?"#0f0":"#888";ctx.fillRect(col*32-cameraX,row*32,32,32);}}}}
+
+// Evil Sonic
+let evilSonicActive=false, evilSonicX=0;
+function updateEvilSonic(){
+if(zone<4||teleportCount>=maxTeleports)return;
+if(!evilSonicActive)evilSonicActive=true;
+teleportCooldown-=1/60;
+if(teleportCooldown<=0&&!teleporting){teleporting=true;teleportTimer=0.5;}
+if(teleporting){teleportTimer-=1/60;if(teleportTimer<=0){evilSonicX=player.x-32;teleporting=false;teleportTimer=1;teleportCount++;teleportCooldown=30;if(teleportCount>=maxTeleports)gamePhase="cutscene";}}
+else if(evilSonicX>=player.x-10 && evilSonicX<player.x){teleportTimer-=1/60;if(teleportTimer<=0)gamePhase="jumpscare";}
+if(evilSonicX<player.x-10)evilSonicX+=2;
+}
+
+// Cutscene
+function drawCutscene(){
+ctx.fillStyle="black";ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.drawImage(assets.evilSonic,canvas.width/2-16,player.y,32,32);
+ctx.fillStyle="red";ctx.font="24px monospace";
+if(cutsceneTimer<120)ctx.fillText("I-’m done with this shit",200,50);
+else if(cutsceneTimer<240)ctx.fillText("What are you…?",200,50);
+else ctx.fillText("I- am- God",200,50);
+if(Math.random()<0.3){for(let i=0;i<50;i++){ctx.fillStyle="lime";ctx.fillText(String.fromCharCode(33+Math.floor(Math.random()*94)),Math.random()*canvas.width,Math.random()*canvas.height);}}
+cutsceneTimer++; if(cutsceneTimer>360)gamePhase="finalKill";
+}
+
+// Final kill
+function drawFinalKill(){ ctx.fillStyle="red"; ctx.fillRect(0,0,canvas.width,canvas.height); assets.jumpScareAudio.play(); setTimeout(()=>{gamePhase="error"},2000);}
+
+// Error screen
+function drawErrorScreen(){ ctx.fillStyle="black"; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle="white"; ctx.font="24px monospace"; ctx.fillText("DESKTOP ERROR",180,160); ctx.fillText("CLICK RESTART",200,200);}
+
+// Final jump scare
+function drawFinalDesktopJumpScare(){
+ctx.fillStyle="rgba(150,0,0,0.9)";ctx.fillRect(0,0,canvas.width,canvas.height);
+ctx.drawImage(assets.evilSonic,canvas.width/2-32,canvas.height/2-32,64,64);
+ctx.drawImage(assets.knucklesJump,canvas.width/2-80,canvas.height/2+10,32,32);
+ctx.drawImage(assets.tailsCorpse,canvas.width/2+50,canvas.height/2+10,32,32);
+if(Math.random()<0.3){jumpScareParticles.push({text:"I AM GOD",x:Math.random()*canvas.width,y:Math.random()*canvas.height,life:120});}
+for(let i=jumpScareParticles.length-1;i>=0;i--){let p=jumpScareParticles[i];ctx.fillStyle="red";ctx.font="28px monospace";ctx.fillText(p.text,p.x,p.y);p.y-=0.5;p.life--;if(p.life<=0)jumpScareParticles.splice(i,1);}
+if(finalJumpScareTimer===0)assets.jumpScareAudio.play(); finalJumpScareTimer++; if(finalJumpScareTimer>300)gamePhase="exit";
+}
+
+// Main loop
+function loop(){
+timer+=1/60; ctx.clearRect(0,0,canvas.width,canvas.height);
+enemies.forEach(e=>e.update());
+switch(gamePhase){
+case"title": ctx.fillStyle="black";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle="white";ctx.font="32px monospace";ctx.fillText("HORROR SONIC",180,160);ctx.font="20px monospace";ctx.fillText("CLICK PLAY TWICE",200,200); break;
+case"gameplay": updatePlayer(); updateEvilSonic(); drawMap(); ctx.fillStyle="blue"; ctx.fillRect(player.x-cameraX,player.y,player.width,player.height); enemies.forEach(e=>e.draw()); rings.forEach(r=>ctx.drawImage(assets.ring,r.x-cameraX,r.y,16,16)); break;
+case"cutscene": drawCutscene(); break;
+case"finalKill": drawFinalKill(); break;
+case"error": drawErrorScreen(); break;
+case"finalJumpScare": drawFinalDesktopJumpScare(); break;
+case"exit": ctx.fillStyle="black";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle="white";ctx.font="24px monospace";ctx.fillText("GAME OVER",200,180); break;
+}
+requestAnimationFrame(loop);
+}
+loop();
+
+// Click events
+canvas.addEventListener("click",()=>{if(gamePhase=="title")gamePhase="gameplay";else if(gamePhase=="error")gamePhase="finalJumpScare";});
+</script>
+</body>
+</html>
